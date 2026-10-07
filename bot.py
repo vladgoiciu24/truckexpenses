@@ -29,6 +29,8 @@ class RecordState(StatesGroup):
     expense_amount = State()
     expense_desc = State()
     
+    trip_origin = State()
+    trip_destination = State()
     trip_deadhead = State()
     trip_loaded = State()
     trip_gross = State()
@@ -44,7 +46,7 @@ def main_menu():
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "🚛 Бот готов к работе! Выбирай действие:",
+        "🚛 Бот запущен и готов к работе! Выбирай действие:",
         reply_markup=main_menu()
     )
 
@@ -107,12 +109,24 @@ async def expense_desc_entered(message: Message, state: FSMContext):
     await state.clear()
 
 
-# --- ПОЕЗДКИ ---
+# --- ПОЕЗДКИ (С АДРЕСАМИ) ---
 @router.callback_query(F.data == "add_trip")
 async def process_trip(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(RecordState.trip_deadhead)
-    await callback.message.edit_text("🚛 Введи пустые мили (Deadhead miles) или 0:")
+    await state.set_state(RecordState.trip_origin)
+    await callback.message.edit_text("📍 Введи адрес отправления (Откуда):")
     await callback.answer()
+
+@router.message(RecordState.trip_origin)
+async def trip_origin_entered(message: Message, state: FSMContext):
+    await state.update_data(origin=message.text)
+    await state.set_state(RecordState.trip_destination)
+    await message.answer("🏁 Введи адрес назначения (Куда):")
+
+@router.message(RecordState.trip_destination)
+async def trip_destination_entered(message: Message, state: FSMContext):
+    await state.update_data(destination=message.text)
+    await state.set_state(RecordState.trip_deadhead)
+    await message.answer("🚛 Введи пустые мили (Deadhead miles) или 0:")
 
 @router.message(RecordState.trip_deadhead)
 async def trip_deadhead_entered(message: Message, state: FSMContext):
@@ -157,8 +171,8 @@ async def trip_gross_entered(message: Message, state: FSMContext):
     await state.update_data(gross=gross, total_miles=total_miles, commission=commission, net=net)
     await state.set_state(RecordState.trip_desc)
     await message.answer(
-        f"📊 Автоматический расчет:\n"
-        f"• Всего миль: {total_miles}\n"
+        f"📊 Расчет маршрута {data['origin']} ➡️ {data['destination']}:\n"
+        f"• Всего миль: {total_miles} (пустые: {deadhead}, груженые: {loaded})\n"
         f"• Гросс: ${gross:.2f}\n"
         f"• Комиссия (12%): ${commission:.2f}\n"
         f"• Чистыми (Net): ${net:.2f}\n\n"
@@ -173,6 +187,8 @@ async def trip_desc_entered(message: Message, state: FSMContext):
     record_data = {
         "user_id": str(message.from_user.id),
         "record_type": "trip",
+        "origin": str(data["origin"]),
+        "destination": str(data["destination"]),
         "deadhead": float(data["deadhead"]),
         "loaded": float(data["loaded"]),
         "total_miles": float(data["total_miles"]),
@@ -185,7 +201,7 @@ async def trip_desc_entered(message: Message, state: FSMContext):
     try:
         supabase.table("truck_records").insert(record_data).execute()
         await message.answer(
-            f"✅ Поездка успешно сохранена!\n"
+            f"✅ Поездка ({data['origin']} ➡️ {data['destination']}) успешно сохранена!\n"
             f"Net: ${data['net']:.2f} (Гросс: ${data['gross']:.2f} минус комиссия 12%)",
             reply_markup=main_menu()
         )
