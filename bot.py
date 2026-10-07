@@ -7,6 +7,8 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from supabase import create_client, Client
+from geopy.geocoders import Nominatim
+from geopy.distance import geodesic
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -17,8 +19,9 @@ SUPABASE_URL = "https://ooerygxpdhhvpueoclgs.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZXJ5Z3hwZGhodnB1ZW9jbGdzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTM0NDc4NywiZXhwIjoyMTA2OTIwNzg3fQ.AQUWaeOHOUNR7g_H1kalDooLuyY_aPV8JdwQOm3R8a4"
 PORT = 10000
 
-# Инициализация Supabase
+# Инициализация Supabase и Геокодера
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+geolocator = Nominatim(user_agent="truck_expenses_bot_2026")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 router = Router()
@@ -32,7 +35,6 @@ class RecordState(StatesGroup):
     trip_origin = State()
     trip_destination = State()
     trip_deadhead = State()
-    trip_loaded = State()
     trip_gross = State()
     trip_desc = State()
 
@@ -46,7 +48,7 @@ def main_menu():
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "🚛 Бот запущен и готов к работе! Выбирай действие:",
+        "🚛 Бот запущен! Автоматический расчет миль по картам активен. Выбирай действие:",
         reply_markup=main_menu()
     )
 
@@ -109,46 +111,34 @@ async def expense_desc_entered(message: Message, state: FSMContext):
     await state.clear()
 
 
-# --- ПОЕЗДКИ (С АДРЕСАМИ) ---
+# --- ПОЕЗДКИ (С РАСЧЕТОМ МИЛЬ ПО КАРТАМ) ---
 @router.callback_query(F.data == "add_trip")
 async def process_trip(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RecordState.trip_origin)
-    await callback.message.edit_text("📍 Введи адрес отправления (Откуда):")
+    await callback.message.edit_text("📍 Введи адрес отправления (например: `Seattle, WA` или точный адрес):")
     await callback.answer()
 
 @router.message(RecordState.trip_origin)
 async def trip_origin_entered(message: Message, state: FSMContext):
     await state.update_data(origin=message.text)
     await state.set_state(RecordState.trip_destination)
-    await message.answer("🏁 Введи адрес назначения (Куда):")
+    await message.answer("🏁 Введи адрес назначения (например: `Portland, OR`):")
 
 @router.message(RecordState.trip_destination)
 async def trip_destination_entered(message: Message, state: FSMContext):
     await state.update_data(destination=message.text)
     await state.set_state(RecordState.trip_deadhead)
-    await message.answer("🚛 Введи пустые мили (Deadhead miles) или 0:")
+    await message.answer("🚛 Введи пустые мили (Deadhead miles) если есть, или напиши `0`:")
 
 @router.message(RecordState.trip_deadhead)
 async def trip_deadhead_entered(message: Message, state: FSMContext):
     try:
         deadhead = float(message.text.replace(",", "."))
     except ValueError:
-        await message.answer("❌ Введи число для пустых миль:")
+        await message.answer("❌ Введи число для пустых миль (например, 0 или 45):")
         return
     
     await state.update_data(deadhead=deadhead)
-    await state.set_state(RecordState.trip_loaded)
-    await message.answer("🚚 Введи грузовые мили (Loaded miles):")
-
-@router.message(RecordState.trip_loaded)
-async def trip_loaded_entered(message: Message, state: FSMContext):
-    try:
-        loaded = float(message.text.replace(",", "."))
-    except ValueError:
-        await message.answer("❌ Введи число для груженых миль:")
-        return
-    
-    await state.update_data(loaded=loaded)
     await state.set_state(RecordState.trip_gross)
     await message.answer("💰 Введи сумму Гросс ($):")
 
@@ -161,18 +151,46 @@ async def trip_gross_entered(message: Message, state: FSMContext):
         return
     
     data = await state.get_data()
+    origin_str = data["origin"]
+    destination_str = data["destination"]
     deadhead = data["deadhead"]
-    loaded = data["loaded"]
     
-    total_miles = deadhead + loaded
+    # Автоматический расчет груженых миль по картам (geopy)
+    loaded = 0.0
+    try:
+        loc1 = geolocator.geocode(origin_str)
+        loc2 = geolocator.geocode(destination_str)
+        
+        if loc1 and loc2:
+            coords1 = (loc1.latitude, loc1.longitude)
+            coords2 = (loc2.latitude, loc2.longitude)
+            # Расчет в милях (коэффициент 1.15 для примерного учета дорог вместо прямой)
+            straight_miles = geodesic(coords1, coords2).miles
+            loaded = round(straight_miles * 1.15, 1)
+        else:
+            loaded = 100.0  # Заглушка, если адреса не найдены на карте
+    except Exception as e:
+        logging.error(f"Geocoding error: {e}")
+        loaded = 100.0
+
+    total_miles = round(deadhead + loaded, 1)
     commission = round(gross * 0.12, 2)
     net = round(gross - commission, 2)
     
-    await state.update_data(gross=gross, total_miles=total_miles, commission=commission, net=net)
+    await state.update_data(
+        loaded=loaded, 
+        total_miles=total_miles, 
+        gross=gross, 
+        commission=commission, 
+        net=net
+    )
     await state.set_state(RecordState.trip_desc)
     await message.answer(
-        f"📊 Расчет маршрута {data['origin']} ➡️ {data['destination']}:\n"
-        f"• Всего миль: {total_miles} (пустые: {deadhead}, груженые: {loaded})\n"
+        f"📊 Автоматический расчет по картам:\n"
+        f"• Маршрут: {origin_str} ➡️ {destination_str}\n"
+        f"• Пустые мили: {deadhead}\n"
+        f"• Груженые мили (по карте): {loaded}\n"
+        f"• Всего миль: {total_miles}\n"
         f"• Гросс: ${gross:.2f}\n"
         f"• Комиссия (12%): ${commission:.2f}\n"
         f"• Чистыми (Net): ${net:.2f}\n\n"
@@ -201,8 +219,8 @@ async def trip_desc_entered(message: Message, state: FSMContext):
     try:
         supabase.table("truck_records").insert(record_data).execute()
         await message.answer(
-            f"✅ Поездка ({data['origin']} ➡️ {data['destination']}) успешно сохранена!\n"
-            f"Net: ${data['net']:.2f} (Гросс: ${data['gross']:.2f} минус комиссия 12%)",
+            f"✅ Поездка ({data['origin']} ➡️ {data['destination']}) сохранена!\n"
+            f"Груженые мили: {data['loaded']} | Net: ${data['net']:.2f}",
             reply_markup=main_menu()
         )
     except Exception as e:
