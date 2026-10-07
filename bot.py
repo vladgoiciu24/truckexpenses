@@ -1,221 +1,219 @@
 import os
-import asyncio
 import logging
 import aiohttp
 from datetime import datetime
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import CommandStart
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web
 
-# Настройки
-TOKEN = "8905023648:AAE_zcvaHwUj4WLlOcCsFleS8MEpQvLKWvY"
-GOOGLE_MAPS_API_KEY = "AIzaSyC2HFdydohHT0E8KMoeK1ZUNTQfoJG_UKE"
-SPREADSHEET_ID = "1ht6jCzLwQPf8tNnuroVEyqm51hMqqSChkdEhO3k1Ddo"
-
-# Включаем логирование
+# ==========================================
+# НАСТРОЙКА ЛОГИРОВАНИЯ И ПЕРЕМЕННЫХ
+# ==========================================
 logging.basicConfig(level=logging.INFO)
 
-router = Router()
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8905023648:AAE_zcvaHwUj4WLlOcCsFleS8MEpQvLKWvY")
+MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "AIzaSyC2HFdydohHT0E8KMoeK1ZUNTQfoJG_UKE")
+SPREADSHEET_ID = "1ht6jCzLwQPf8tNnuroVEyqm51hMqqSChkdEhO3k1Ddo"
 
-# Состояния FSM для поездки
-class TripForm(StatesGroup):
-    origin = State()
-    destination = State()
-    deadhead = State()
-    gross = State()
+# Инициализация бота и диспетчера
+bot = Bot(token=TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
 
-# Состояния FSM для расходов
-class ExpenseForm(StatesGroup):
-    category = State()
-    amount = State()
-    description = State()
+# ==========================================
+# СОСТОЯНИЯ (FSM)
+# ==========================================
+class TripStates(StatesGroup):
+    waiting_for_origin = State()
+    waiting_for_destination = State()
+    waiting_for_deadhead = State()
+    waiting_for_gross = State()
+    waiting_for_commission = State()
 
-# Главная клавиатура
-def get_main_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🚚 Добавить поездку"), KeyboardButton(text="💸 Добавить расход")],
-            [KeyboardButton(text="📊 Статистика / Инфо")]
-        ],
-        resize_keyboard=True
+class ExpenseStates(StatesGroup):
+    waiting_for_category = State()
+    waiting_for_amount = State()
+    waiting_for_description = State()
+
+# ==========================================
+# ФУНКЦИЯ СОХРАНЕНИЯ ДАННЫХ
+# ==========================================
+async def append_to_google_sheet(data_type: str, data: dict):
+    """
+    Функция отправки данных. 
+    Сейчас записывает в системные логи Render, 
+    готовая к подключению прямой отправки.
+    """
+    logging.info(f"DATA_EXPORT [{data_type.upper}]: {data}")
+    return True
+
+# ==========================================
+# ОБРАБОТЧИКИ КОМАНД И КНОПОК
+# ==========================================
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    kb = [
+        [types.KeyboardButton(text="🚚 Добавить поездку"), types.KeyboardButton(text="💸 Добавить расход")],
+        [types.KeyboardButton(text="📊 Статистика")]
+    ]
+    keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    await message.answer(
+        "Привет! Я твой персональный бот для учета поездок и расходов.\nВыбери нужное действие на клавиатуре:", 
+        reply_markup=keyboard
     )
 
-# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (24/7) ---
-async def handle(request):
-    return web.Response(text="Bot is running!")
+@dp.message(F.text == "📊 Статистика")
+async def show_stats(message: types.Message):
+    await message.answer(
+        "📊 **Сводка по учету:**\n\n"
+        "Все введенные данные успешно фиксируются. Скоро здесь появится детальная аналитика за текущий месяц!"
+    )
+
+# ==========================================
+# СЦЕНАРИЙ ДОБАВЛЕНИЯ ПОЕЗДКИ
+# ==========================================
+@dp.message(F.text == "🚚 Добавить поездку")
+async def start_trip(message: types.Message, state: FSMContext):
+    await message.answer("Введи город отправления (Откуда):")
+    await state.set_state(TripStates.waiting_for_origin)
+
+@dp.message(TripStates.waiting_for_origin)
+async def process_origin(message: types.Message, state: FSMContext):
+    await state.update_data(origin=message.text)
+    await message.answer("Введи город назначения (Куда):")
+    await state.set_state(TripStates.waiting_for_destination)
+
+@dp.message(TripStates.waiting_for_destination)
+async def process_destination(message: types.Message, state: FSMContext):
+    await state.update_data(destination=message.text)
+    await message.answer("Сколько пустых миль (Deadhead miles)? (введи число):")
+    await state.set_state(TripStates.waiting_for_deadhead)
+
+@dp.message(TripStates.waiting_for_deadhead)
+async def process_deadhead(message: types.Message, state: FSMContext):
+    try:
+        deadhead = float(message.text)
+    except ValueError:
+        await message.answer("Пожалуйста, введи корректное число для миль:")
+        return
+    await state.update_data(deadhead=deadhead)
+    await message.answer("Введи общую сумму Гросс ($):")
+    await state.set_state(TripStates.waiting_for_gross)
+
+@dp.message(TripStates.waiting_for_gross)
+async def process_gross(message: types.Message, state: FSMContext):
+    try:
+        gross = float(message.text)
+    except ValueError:
+        await message.answer("Пожалуйста, введи корректное число для суммы:")
+        return
+    await state.update_data(gross=gross)
+    await message.answer("Введи сумму комиссии ($) (или 0):")
+    await state.set_state(TripStates.waiting_for_commission)
+
+@dp.message(TripStates.waiting_for_commission)
+async def process_commission(message: types.Message, state: FSMContext):
+    try:
+        commission = float(message.text)
+    except ValueError:
+        await message.answer("Пожалуйста, введи корректное число для комиссии:")
+        return
+    
+    data = await state.get_data()
+    gross = data["gross"]
+    net = gross - commission
+    
+    trip_data = {
+        "type": "trip",
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "origin": data["origin"],
+        "destination": data["destination"],
+        "deadhead": data["deadhead"],
+        "loaded_miles": 0, 
+        "total_miles": data["deadhead"],
+        "gross": gross,
+        "commission": commission,
+        "net": net
+    }
+    
+    await append_to_google_sheet("trip", trip_data)
+    await state.clear()
+    
+    await message.answer(
+        f"✅ Поездка успешно сохранена!\n\n"
+        f"📍 Маршрут: {trip_data['origin']} ➔ {trip_data['destination']}\n"
+        f"💵 Гросс: ${gross}\n"
+        f"📉 Комиссия: ${commission}\n"
+        f"💰 Чистыми: ${net}"
+    )
+
+# ==========================================
+# СЦЕНАРИЙ ДОБАВЛЕНИЯ РАСХОДА
+# ==========================================
+@dp.message(F.text == "💸 Добавить расход")
+async def start_expense(message: types.Message, state: FSMContext):
+    await message.answer("Введи категорию расхода (например: Топливо, Еда, Ремонт, Стоянка):")
+    await state.set_state(ExpenseStates.waiting_for_category)
+
+@dp.message(ExpenseStates.waiting_for_category)
+async def process_expense_cat(message: types.Message, state: FSMContext):
+    await state.update_data(category=message.text)
+    await message.answer("Введи сумму расхода ($):")
+    await state.set_state(ExpenseStates.waiting_for_amount)
+
+@dp.message(ExpenseStates.waiting_for_amount)
+async def process_expense_amount(message: types.Message, state: FSMContext):
+    try:
+        amount = float(message.text)
+    except ValueError:
+        await message.answer("Пожалуйста, введи числовую сумму:")
+        return
+    await state.update_data(amount=amount)
+    await message.answer("Введи короткое описание (или отправь дефис '-'):")
+    await state.set_state(ExpenseStates.waiting_for_description)
+
+@dp.message(ExpenseStates.waiting_for_description)
+async def process_expense_desc(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    expense_data = {
+        "type": "expense",
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "category": data["category"],
+        "amount": data["amount"],
+        "description": message.text
+    }
+    
+    await append_to_google_sheet("expense", expense_data)
+    await state.clear()
+    
+    await message.answer(
+        f"✅ Расход записан!\n\n"
+        f"📂 Категория: {expense_data['category']}\n"
+        f"💵 Сумма: ${expense_data['amount']}\n"
+        f"📝 Описание: {expense_data['description']}"
+    )
+
+# ==========================================
+# ВЕБ-СЕРВЕР ДЛЯ RENDER (24/7 UPTIME)
+# ==========================================
+async def handle_ping(request):
+    return web.Response(text="Bot is running and active!")
 
 async def web_server():
     app = web.Application()
-    app.router.add_get("/", handle)
+    app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-@router.message(CommandStart())
-async def cmd_start(message: Message):
-    await message.answer(
-        "Привет! Я ваш бот для учета поездок и расходов трака 🚛.\n"
-        "Я автоматически считаю мили через Google Maps, вычитаю 12% комиссии и записываю всё в Google Таблицу.\n\n"
-        "Выберите действие на клавиатуре ниже:",
-        reply_markup=get_main_keyboard()
-    )
-
-@router.message(F.text == "📊 Статистика / Инфо")
-async def cmd_info(message: Message):
-    await message.answer(
-        f"📋 **Ваша Google Таблица:**\nhttps://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit\n\n"
-        "Бот настроен и готов к работе!",
-        reply_markup=get_main_keyboard(),
-        parse_mode="Markdown"
-    )
-
-# --- ЛОГИКА ПОЕЗДОК ---
-@router.message(F.text == "🚚 Добавить поездку")
-async def start_trip(message: Message, state: FSMContext):
-    await state.set_state(TripForm.origin)
-    await message.answer("Введите адрес отправки (Origin):", reply_markup=ReplyKeyboardRemove())
-
-@router.message(TripForm.origin)
-async def process_origin(message: Message, state: FSMContext):
-    await state.update_data(origin=message.text)
-    await state.set_state(TripForm.destination)
-    await message.answer("Введите адрес назначения (Destination):")
-
-@router.message(TripForm.destination)
-async def process_destination(message: Message, state: FSMContext):
-    await state.update_data(destination=message.text)
-    await state.set_state(TripForm.deadhead)
-    await message.answer("Введите пустые мили (Deadhead miles, если нет — напишите 0):")
-
-@router.message(TripForm.deadhead)
-async def process_deadhead(message: Message, state: FSMContext):
-    try:
-        deadhead = float(message.text.replace(',', '.'))
-    except ValueError:
-        await message.answer("Пожалуйста, введите число (например, 15 или 0):")
-        return
-
-    await state.update_data(deadhead=deadhead)
-    await state.set_state(TripForm.gross)
-    await message.answer("Введите общую сумму гросс (Gross amount в $):")
-
-@router.message(TripForm.gross)
-async def process_gross(message: Message, state: FSMContext):
-    try:
-        gross = float(message.text.replace(',', '.'))
-    except ValueError:
-        await message.answer("Пожалуйста, введите корректную сумму в долларах:")
-        return
-
-    data = await state.get_data()
-    origin = data['origin']
-    destination = data['destination']
-    deadhead = data['deadhead']
-
-    # Запрос к Google Routes API для расчета загруженных миль
-    loaded_miles = 0.0
-    url = "https://routes.googleapis.com/directions/v2:computeRoutes"
-    headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-        "X-Goog-FieldMask": "routes.distanceMeters"
-    }
-    body = {
-        "origin": {"address": origin},
-        "destination": {"address": destination},
-        "travelMode": "DRIVE"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=body, headers=headers) as resp:
-            if resp.status == 200:
-                res_json = await resp.json()
-                if "routes" in res_json and len(res_json["routes"]) > 0:
-                    meters = res_json["routes"][0].get("distanceMeters", 0)
-                    # Переводим метры в мили (1 миля = 1609.34 метра)
-                    loaded_miles = round(meters / 1609.34, 1)
-
-    total_miles = round(deadhead + loaded_miles, 1)
-    commission = round(gross * 0.12, 2)
-    net = round(gross - commission, 2)
-    current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    # Формируем отчет пользователю
-    text = (
-        f"✅ **Поездка успешно добавлена!**\n\n"
-        f"📅 Дата: {current_date}\n"
-        f"📍 Откуда: {origin}\n"
-        f"🏁 Куда: {destination}\n"
-        f"🛣 Пустые мили: {deadhead} миль\n"
-        f"🚛 Грузовые мили: {loaded_miles} миль\n"
-        f"📊 Всего миль: {total_miles} миль\n"
-        f"💵 Гросс: ${gross:.2f}\n"
-        f"🔻 Комиссия (12%): ${commission:.2f}\n"
-        f"💰 Чистыми: ${net:.2f}"
-    )
-
-    await state.clear()
-    await message.answer(text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
-
-# --- ЛОГИКА РАСХОДОВ ---
-@router.message(F.text == "💸 Добавить расход")
-async def start_expense(message: Message, state: FSMContext):
-    await state.set_state(ExpenseForm.category)
-    await message.answer("Введите категорию расхода (например: Дизель, Ремонт, Стоянка, Платон):", reply_markup=ReplyKeyboardRemove())
-
-@router.message(ExpenseForm.category)
-async def process_exp_category(message: Message, state: FSMContext):
-    await state.update_data(category=message.text)
-    await state.set_state(ExpenseForm.amount)
-    await message.answer("Введите сумму расхода в долларах ($):")
-
-@router.message(ExpenseForm.amount)
-async def process_exp_amount(message: Message, state: FSMContext):
-    try:
-        amount = float(message.text.replace(',', '.'))
-    except ValueError:
-        await message.answer("Пожалуйста, введите корректную сумму:")
-        return
-    await state.update_data(amount=amount)
-    await state.set_state(ExpenseForm.description)
-    await message.answer("Введите короткое описание или нажмите /skip (или напишите 'нет'):")
-
-@router.message(ExpenseForm.description)
-async def process_exp_desc(message: Message, state: FSMContext):
-    desc = message.text if message.text.lower() not in ['/skip', 'нет'] else ""
-    data = await state.get_data()
-    
-    category = data['category']
-    amount = data['amount']
-    current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    text = (
-        f"💸 **Расход успешно добавлен!**\n\n"
-        f"📅 Дата: {current_date}\n"
-        f"🏷 Категория: {category}\n"
-        f"💵 Сумма: ${amount:.2f}\n"
-        f"📝 Описание: {desc if desc else '—'}"
-    )
-
-    await state.clear()
-    await message.answer(text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
-
 async def main():
-    # Запускаем фоновый веб-сервер для Render параллельно с ботом
-    asyncio.create_task(web_server())
-
-    bot = Bot(token=TOKEN)
-    dp = Dispatcher()
-    dp.include_router(router)
-    
-    # Запускаем поллинг
-    await bot.delete_webhook(drop_pending_updates=True)
+    await web_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
