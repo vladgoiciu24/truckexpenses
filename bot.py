@@ -212,22 +212,20 @@ async def trip_desc_entered(message: Message, state: FSMContext):
         "rate_per_mile": float(data["rate_per_mile"]),
         "description": str(desc)
     }
-    
     try:
         supabase.table("truck_records").insert(record_data).execute()
-        total_m = data['total_miles']
-        rate_m = data['rate_per_mile']
-        net_v = data['net']
-        await message.answer(
-            f"✅ Поездка сохранена!\nВсего миль: {total_m} | Ставка: ${rate_m:.2f}/mi \vert{} Net:${net_v:.2f}",
-            reply_markup=main_menu()
-        )
+        
+        # Сохраняем в переменные, чтобы f-строка была максимально простой и без багов
+        m = data['total_miles']
+        r = data['rate_per_mile']
+        n = data['net']
+        
+        text_msg = f"✅ Поездка сохранена!\nВсего миль: {m} | Ставка: ${r:.2f} за милю | Чистыми: ${n:.2f}"
+        
+        await message.answer(text_msg, reply_markup=main_menu())
     except Exception as e:
         logging.error(f"Supabase error (trip): {e}")
         await message.answer(f"❌ Ошибка сохранения поездки: {e}")
-    
-    await state.clear()
-
 @router.callback_query(F.data == "week_stats")
 async def show_week_stats(callback: CallbackQuery):
     try:
