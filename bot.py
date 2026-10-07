@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 # Конфигурация
 TELEGRAM_TOKEN = "8905023648:AAE_zcvaHwUj4WLlOcCsFleS8MEpQvLKWvY"
 SUPABASE_URL = "https://ooerygxpdhhvpueoclgs.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZXJ5Z3hwZGhodnB1ZW9jbGdzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcyODIxNTQ5MywiZXhwIjoyMDQzNzkxNDkzfQ.qR5q2X1vG5Vd6q8_L8t7V9x3K2s1M4p6Z8w9Q0e1R2t" # Укажи полный ключ service_role из Supabase
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZXJ5Z3hwZGhodnB1ZW9jbGdzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTM0NDc4NywiZXhwIjoyMTA2OTIwNzg3fQ.AQUWaeOHOUNR7g_H1kalDooLuyY_aPV8JdwQOm3R8a4"
 PORT = 10000
 
 # Инициализация Supabase
@@ -95,19 +95,20 @@ async def expense_desc_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     
     record_data = {
-        "user_id": message.from_user.id,
+        "user_id": int(message.from_user.id),
         "record_type": "expense",
-        "category": data["category"],
-        "amount": data["amount"],
-        "description": desc
+        "category": str(data["category"]),
+        "amount": float(data["amount"]),
+        "description": str(desc)
     }
     
     try:
+        logging.info(f"Attempting to insert expense: {record_data}")
         supabase.table("truck_records").insert(record_data).execute()
         await message.answer("✅ Расход успешно сохранен в базу!", reply_markup=main_menu())
     except Exception as e:
-        logging.error(f"Supabase error: {e}")
-        await message.answer("❌ Ошибка сохранения расхода в облачную базу.")
+        logging.error(f"Supabase error (expense): {e}")
+        await message.answer(f"❌ Ошибка сохранения расхода в облачную базу: {e}")
     
     await state.clear()
 
@@ -171,17 +172,18 @@ async def trip_desc_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     
     record_data = {
-        "user_id": message.from_user.id,
+        "user_id": int(message.from_user.id),
         "record_type": "trip",
-        "deadhead_miles": data["deadhead"],
-        "loaded_miles": data["loaded"],
-        "gross_amount": data["gross"],
-        "commission_amount": data["commission"],
-        "amount": data["net"],
-        "description": desc
+        "deadhead_miles": float(data["deadhead"]),
+        "loaded_miles": float(data["loaded"]),
+        "gross_amount": float(data["gross"]),
+        "commission_amount": float(data["commission"]),
+        "amount": float(data["net"]),
+        "description": str(desc)
     }
     
     try:
+        logging.info(f"Attempting to insert trip: {record_data}")
         supabase.table("truck_records").insert(record_data).execute()
         await message.answer(
             f"✅ Поездка успешно сохранена!\n"
@@ -189,13 +191,13 @@ async def trip_desc_entered(message: Message, state: FSMContext):
             reply_markup=main_menu()
         )
     except Exception as e:
-        logging.error(f"Supabase error: {e}")
-        await message.answer("❌ Ошибка сохранения поездки в облачную базу.")
+        logging.error(f"Supabase error (trip): {e}")
+        await message.answer(f"❌ Ошибка сохранения поездки в облачную базу: {e}")
     
     await state.clear()
 
 
-# Веб-сервер для Render (исправлен запуск AppRunner)
+# Веб-сервер для Render (health check)
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -204,14 +206,15 @@ async def web_server():
     app.router.add_get("/", handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.AppRunner(app, host="0.0.0.0", port=PORT) # исправление инициализации сайта
-    # Правильный запуск AppRunner через site/TCPSite
     tcpsite = web.TCPSite(runner, "0.0.0.0", PORT)
     await tcpsite.start()
 
 async def main():
     dp = Dispatcher()
     dp.include_router(router)
+    
+    # Сбрасываем зависшие апдейты перед стартом
+    await bot.delete_webhook(drop_pending_updates=True)
     
     await asyncio.gather(
         web_server(),
