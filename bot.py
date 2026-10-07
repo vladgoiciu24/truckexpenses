@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 import aiohttp
@@ -7,6 +8,7 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiohttp import web
 
 # Настройки
 TOKEN = "8905023648:AAE_zcvaHwUj4WLlOcCsFleS8MEpQvLKWvY"
@@ -41,11 +43,18 @@ def get_main_keyboard():
         resize_keyboard=True
     )
 
-# Функция отправки данных в Google Таблицу через Apps Script Web App (или публичный метод)
-async def append_to_google_sheet(data_type: dict):
-    # Здесь используется интеграция через публичный эндпоинт или Apps Script. 
-    # Так как мы используем прямую связь, отправляем запрос на запись.
-    pass  # Мы свяжем это с простым бэкендом записи или прямой отправкой.
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (24/7) ---
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -139,7 +148,7 @@ async def process_gross(message: Message, state: FSMContext):
     # Формируем отчет пользователю
     text = (
         f"✅ **Поездка успешно добавлена!**\n\n"
-        f"📅 Дата: {current3_date if 'current3_date' in locals() else current_date}\n"
+        f"📅 Дата: {current_date}\n"
         f"📍 Откуда: {origin}\n"
         f"🏁 Куда: {destination}\n"
         f"🛣 Пустые мили: {deadhead} миль\n"
@@ -197,6 +206,9 @@ async def process_exp_desc(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
 async def main():
+    # Запускаем фоновый веб-сервер для Render параллельно с ботом
+    asyncio.create_task(web_server())
+
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
