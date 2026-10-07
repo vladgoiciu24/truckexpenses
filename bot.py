@@ -19,12 +19,11 @@ dp = Dispatcher(storage=MemoryStorage())
 
 CSV_FILE = "truck_data.csv"
 
-# Инициализация CSV файла, если его нет
 def init_csv():
     if not os.path.exists(CSV_FILE):
         with open(CSV_FILE, mode="w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["Date", "Type", "Origin", "Destination", "Deadhead", "Loaded", "TotalMiles", "Gross", "Commission", "Net", "Category", "Description"])
+            writer.writerow(["Date", "Type", "Origin", "Destination", "Deadhead", "Loaded", "TotalMiles", "Gross", "Commission", "Net", "Category", "Amount", "Description"])
 
 init_csv()
 
@@ -53,7 +52,7 @@ async def cmd_start(message: types.Message):
         [types.KeyboardButton(text="📊 Выгрузить отчет (CSV)")]
     ]
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-    await message.answer("Бот готов к работе без всяких блокировок Google! Выбирай действие:", reply_markup=keyboard)
+    await message.answer("Бот готов! Выбирай действие:", reply_markup=keyboard)
 
 @dp.message(F.text == "📊 Выгрузить отчет (CSV)")
 async def export_csv(message: types.Message):
@@ -63,7 +62,7 @@ async def export_csv(message: types.Message):
     else:
         await message.answer("⚠️ База данных пока пуста.")
 
-# Сценарий поездки
+# Поездки
 @dp.message(F.text == "🚚 Добавить поездку")
 async def start_trip(message: types.Message, state: FSMContext):
     await message.answer("📍 Введи город отправления (Откуда):")
@@ -140,15 +139,13 @@ async def process_commission(message: types.Message, state: FSMContext):
         gross,
         commission,
         net,
-        "",
-        ""
+        "", "", ""
     ]
     save_row(row)
     await state.clear()
-    
     await message.answer(f"✅ Поездка сохранена!\nМаршрут: {data['origin']} ➔ {data['destination']}\nЧистыми: ${net}")
 
-# Сценарий расхода
+# Расходы
 @dp.message(F.text == "💸 Добавить расход")
 async def start_expense(message: types.Message, state: FSMContext):
     await message.answer("📂 Категория расхода (Топливо, Еда, Ремонт...):")
@@ -177,8 +174,9 @@ async def process_desc(message: types.Message, state: FSMContext):
     row = [
         datetime.now().strftime("%Y-%m-%d %H:%M"),
         "expense",
-        "", "", 0, 0, 0, 0, 0, 0,
+        "", "", "", "", "", "", "", "",
         data["category"],
+        data["amount"],
         message.text
     ]
     save_row(row)
