@@ -1,6 +1,5 @@
 import os
 import logging
-import csv
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -9,24 +8,24 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import web
+from supabase import create_client, Client
 
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8905023648:AAE_zcvaHwUj4WLlOcCsFleS8MEpQvLKWvY")
 MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "AIzaSyC2HFdydohHT0E8KMoeK1ZUNTQfoJG_UKE")
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+# Инициализация клиентов
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-CSV_FILE = "truck_data.csv"
-
-def init_csv():
-    if not os.path.exists(CSV_FILE):
-        with open(CSV_FILE, mode="w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Date", "Type", "Origin", "Destination", "Deadhead", "Loaded", "TotalMiles", "Gross", "Commission", "Net", "Category", "Amount", "Description"])
-
-init_csv()
+# Инициализация Supabase клиента (если ключи заданы)
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 class TripStates(StatesGroup):
     waiting_for_origin = State()
@@ -40,27 +39,37 @@ class ExpenseStates(StatesGroup):
     waiting_for_amount = State()
     waiting_for_description = State()
 
-def save_row(row_data):
-    with open(CSV_FILE, mode="a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(row_data)
+def save_to_supabase(row_data: dict):
+    if not supabase:
+        logging.error("Supabase клиент не инициализирован (проверь переменные окружения SUPABASE_URL и SUPABASE_KEY)")
+        return False
+    try:
+        response = supabase.table("truck_records").insert(row_data).execute()
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка сохранения в Supabase: {e}")
+        return False
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     kb = [
         [types.KeyboardButton(text="🚚 Добавить поездку"), types.KeyboardButton(text="💸 Добавить расход")],
-        [types.KeyboardButton(text="📊 Выгрузить отчет (CSV)")]
+        [types.KeyboardButton(text="📊 Статус базы данных")]
     ]
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-    await message.answer("Бот готов! Выбирай действие:", reply_markup=keyboard)
+    await message.answer("Бот готов! Все данные сохраняются в облачную базу Supabase 24/7. Выбирай действие:", reply_markup=keyboard)
 
-@dp.message(F.text == "📊 Выгрузить отчет (CSV)")
-async def export_csv(message: types.Message):
-    if os.path.exists(CSV_FILE) and os.path.getsize(CSV_FILE) > 0:
-        file = types.FSInputFile(CSV_FILE)
-        await message.answer_document(file, caption="📂 Твоя актуальная база данных учета")
-    else:
-        await message.answer("⚠️ База данных пока пуста.")
+@dp.message(F.text == "📊 Статус базы данных")
+async def check_db_status(message: types.Message):
+    if not supabase:
+        await message.answer("⚠️ Ошибка: не настроены ключи подключения к Supabase на Render.")
+        return
+    try:
+        res = supabase.table("truck_records").select("id", count="exact").execute()
+        count = res.count if hasattr(res, 'count') else "много"
+        await message.answer(f"✅ Подключение к Supabase стабильно!\nЗаписей в таблице: {count}")
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка соединения с базой: {e}")
 
 # --- СЦЕНАРИЙ ПОЕЗДОК ---
 @dp.message(F.text == "🚚 Добавить поездку")
@@ -83,7 +92,7 @@ async def process_destination(message: types.Message, state: FSMContext):
 @dp.message(TripStates.waiting_for_deadhead)
 async def process_deadhead(message: types.Message, state: FSMContext):
     try:
-        deadhead = float(message.text)
+        deadhead = float(message.text.replace(',', '.'))
     except ValueError:
         await message.answer("Введи число:")
         return
@@ -94,7 +103,7 @@ async def process_deadhead(message: types.Message, state: FSMContext):
 @dp.message(TripStates.waiting_for_loaded_miles)
 async def process_loaded(message: types.Message, state: FSMContext):
     try:
-        loaded = float(message.text)
+        loaded = float(message.text.replace(',', '.'))
     except ValueError:
         await message.answer("Введи число:")
         return
@@ -105,7 +114,7 @@ async def process_loaded(message: types.Message, state: FSMContext):
 @dp.message(TripStates.waiting_for_gross)
 async def process_gross(message: types.Message, state: FSMContext):
     try:
-        gross = float(message.text)
+        gross = float(message.text.replace(',', '.'))
     except ValueError:
         await message.answer("Введи число:")
         return
@@ -116,7 +125,7 @@ async def process_gross(message: types.Message, state: FSMContext):
 @dp.message(TripStates.waiting_for_commission)
 async def process_commission(message: types.Message, state: FSMContext):
     try:
-        commission = float(message.text)
+        commission = float(message.text.replace(',', '.'))
     except ValueError:
         await message.answer("Введи число:")
         return
@@ -128,22 +137,29 @@ async def process_commission(message: types.Message, state: FSMContext):
     gross = data["gross"]
     net = gross - commission
     
-    row = [
-        datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "trip",
-        data["origin"],
-        data["destination"],
-        deadhead,
-        loaded,
-        total,
-        gross,
-        commission,
-        net,
-        "", "", ""
-    ]
-    save_row(row)
+    row_data = {
+        "user_id": message.from_user.id,
+        "type": "trip",
+        "origin": data["origin"],
+        "destination": data["destination"],
+        "deadhead": deadhead,
+        "loaded": loaded,
+        "total_miles": total,
+        "gross": gross,
+        "commission": commission,
+        "net": net,
+        "category": None,
+        "amount": None,
+        "description": f"Trip from {data['origin']} to {data['destination']}"
+    }
+    
+    success = save_to_supabase(row_data)
     await state.clear()
-    await message.answer(f"✅ Поездка сохранена!\nМаршрут: {data['origin']} ➔ {data['destination']}\nЧистыми: ${net}")
+    
+    if success:
+        await message.answer(f"✅ Поездка сохранена в Supabase!\nМаршрут: {data['origin']} ➔ {data['destination']}\nЧистыми: ${net:.2f}")
+    else:
+        await message.answer("❌ Ошибка сохранения поездки в облачную базу.")
 
 # --- СЦЕНАРИЙ РАСХОДОВ С КНОПКАМИ ---
 @dp.message(F.text == "💸 Добавить расход")
@@ -174,7 +190,7 @@ async def process_category_callback(callback: types.CallbackQuery, state: FSMCon
 @dp.message(ExpenseStates.waiting_for_amount)
 async def process_expense_amount(message: types.Message, state: FSMContext):
     try:
-        amount = float(message.text)
+        amount = float(message.text.replace(',', '.'))
     except ValueError:
         await message.answer("⚠️ Пожалуйста, введи число (сумму):")
         return
@@ -185,17 +201,29 @@ async def process_expense_amount(message: types.Message, state: FSMContext):
 @dp.message(ExpenseStates.waiting_for_description)
 async def process_expense_description(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    row = [
-        datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "expense",
-        "", "", "", "", "", "", "", "",
-        data["category"],
-        data["amount"],
-        message.text
-    ]
-    save_row(row)
+    row_data = {
+        "user_id": message.from_user.id,
+        "type": "expense",
+        "origin": None,
+        "destination": None,
+        "deadhead": None,
+        "loaded": None,
+        "total_miles": None,
+        "gross": None,
+        "commission": None,
+        "net": None,
+        "category": data["category"],
+        "amount": data["amount"],
+        "description": message.text
+    }
+    
+    success = save_to_supabase(row_data)
     await state.clear()
-    await message.answer(f"✅ Расход записан!\nКатегория: {data['category']}\nСумма: ${data['amount']}\nОписание: {message.text}")
+    
+    if success:
+        await message.answer(f"✅ Расход записан в Supabase!\nКатегория: {data['category']}\nСумма: ${data['amount']:.2f}\nОписание: {message.text}")
+    else:
+        await message.answer("❌ Ошибка сохранения расхода в облачную базу.")
 
 async def handle_ping(request):
     return web.Response(text="Bot is active!")
