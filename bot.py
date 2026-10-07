@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 TELEGRAM_TOKEN = "8905023648:AAE_zcvaHwUj4WLlOcCsFleS8MEpQvLKWvY"
 SUPABASE_URL = "https://ooerygxpdhhvpueoclgs.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZXJ5Z3hwZGhodnB1ZW9jbGdzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTM0NDc4NywiZXhwIjoyMTA2OTIwNzg3fQ.AQUWaeOHOUNR7g_H1kalDooLuyY_aPV8JdwQOm3R8a4"
-PORT = 10000
+PORT = int(os.environ.get("PORT", 10000))
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 geolocator = Nominatim(user_agent="truck_expenses_bot_2026")
