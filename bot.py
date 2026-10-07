@@ -25,20 +25,15 @@ router = Router()
 
 # Состояния FSM
 class RecordState(StatesGroup):
-    choosing_type = State()
-    
-    # Расходы
     expense_category = State()
     expense_amount = State()
     expense_desc = State()
     
-    # Поездки
     trip_deadhead = State()
     trip_loaded = State()
     trip_gross = State()
     trip_desc = State()
 
-# Главное меню
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💸 Добавить расход", callback_data="add_expense")],
@@ -49,7 +44,7 @@ def main_menu():
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "Бот готов! Все данные сохраняются в облачную базу Supabase 24/7. Выбирай действие:",
+        "🚛 Бот готов к работе! Выбирай действие:",
         reply_markup=main_menu()
     )
 
@@ -64,7 +59,7 @@ async def process_expense(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🛡 Страховка", callback_data="exp_Страховка")],
         [InlineKeyboardButton(text="🅿️ Трейлер", callback_data="exp_Трейлер")],
         [InlineKeyboardButton(text="🚛 Трак", callback_data="exp_Трак")],
-        [InlineKeyboardButton(text="📦 Прочие расходы", callback_data="exp_Прочие расходы")]
+        [InlineKeyboardButton(text="📦 Прочие расходы", callback_data="exp_Прочие")]
     ])
     await callback.message.edit_text("📁 Выбери категорию расхода:", reply_markup=keyboard)
     await callback.answer()
@@ -95,7 +90,7 @@ async def expense_desc_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     
     record_data = {
-        "user_id": int(message.from_user.id),
+        "user_id": str(message.from_user.id),
         "record_type": "expense",
         "category": str(data["category"]),
         "amount": float(data["amount"]),
@@ -103,12 +98,11 @@ async def expense_desc_entered(message: Message, state: FSMContext):
     }
     
     try:
-        logging.info(f"Attempting to insert expense: {record_data}")
         supabase.table("truck_records").insert(record_data).execute()
         await message.answer("✅ Расход успешно сохранен в базу!", reply_markup=main_menu())
     except Exception as e:
         logging.error(f"Supabase error (expense): {e}")
-        await message.answer(f"❌ Ошибка сохранения расхода в облачную базу: {e}")
+        await message.answer(f"❌ Ошибка сохранения расхода: {e}")
     
     await state.clear()
 
@@ -117,7 +111,7 @@ async def expense_desc_entered(message: Message, state: FSMContext):
 @router.callback_query(F.data == "add_trip")
 async def process_trip(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RecordState.trip_deadhead)
-    await callback.message.edit_text("🚛 Пустые мили (Deadhead miles):\n*(Введи число или 0)*")
+    await callback.message.edit_text("🚛 Введи пустые мили (Deadhead miles) или 0:")
     await callback.answer()
 
 @router.message(RecordState.trip_deadhead)
@@ -130,7 +124,7 @@ async def trip_deadhead_entered(message: Message, state: FSMContext):
     
     await state.update_data(deadhead=deadhead)
     await state.set_state(RecordState.trip_loaded)
-    await message.answer("🚚 Грузовые мили (Loaded miles):")
+    await message.answer("🚚 Введи грузовые мили (Loaded miles):")
 
 @router.message(RecordState.trip_loaded)
 async def trip_loaded_entered(message: Message, state: FSMContext):
@@ -142,7 +136,7 @@ async def trip_loaded_entered(message: Message, state: FSMContext):
     
     await state.update_data(loaded=loaded)
     await state.set_state(RecordState.trip_gross)
-    await message.answer("💰 Сумма Гросс ($):")
+    await message.answer("💰 Введи сумму Гросс ($):")
 
 @router.message(RecordState.trip_gross)
 async def trip_gross_entered(message: Message, state: FSMContext):
@@ -152,14 +146,19 @@ async def trip_gross_entered(message: Message, state: FSMContext):
         await message.answer("❌ Введи число для суммы Гросс:")
         return
     
-    # Автоматически считаем комиссию 12% и Net
+    data = await state.get_data()
+    deadhead = data["deadhead"]
+    loaded = data["loaded"]
+    
+    total_miles = deadhead + loaded
     commission = round(gross * 0.12, 2)
     net = round(gross - commission, 2)
     
-    await state.update_data(gross=gross, commission=commission, net=net)
+    await state.update_data(gross=gross, total_miles=total_miles, commission=commission, net=net)
     await state.set_state(RecordState.trip_desc)
     await message.answer(
         f"📊 Автоматический расчет:\n"
+        f"• Всего миль: {total_miles}\n"
         f"• Гросс: ${gross:.2f}\n"
         f"• Комиссия (12%): ${commission:.2f}\n"
         f"• Чистыми (Net): ${net:.2f}\n\n"
@@ -172,18 +171,18 @@ async def trip_desc_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     
     record_data = {
-        "user_id": int(message.from_user.id),
+        "user_id": str(message.from_user.id),
         "record_type": "trip",
-        "deadhead_miles": float(data["deadhead"]),
-        "loaded_miles": float(data["loaded"]),
-        "gross_amount": float(data["gross"]),
-        "commission_amount": float(data["commission"]),
-        "amount": float(data["net"]),
+        "deadhead": float(data["deadhead"]),
+        "loaded": float(data["loaded"]),
+        "total_miles": float(data["total_miles"]),
+        "gross": float(data["gross"]),
+        "commission": float(data["commission"]),
+        "net": float(data["net"]),
         "description": str(desc)
     }
     
     try:
-        logging.info(f"Attempting to insert trip: {record_data}")
         supabase.table("truck_records").insert(record_data).execute()
         await message.answer(
             f"✅ Поездка успешно сохранена!\n"
@@ -192,12 +191,12 @@ async def trip_desc_entered(message: Message, state: FSMContext):
         )
     except Exception as e:
         logging.error(f"Supabase error (trip): {e}")
-        await message.answer(f"❌ Ошибка сохранения поездки в облачную базу: {e}")
+        await message.answer(f"❌ Ошибка сохранения поездки: {e}")
     
     await state.clear()
 
 
-# Веб-сервер для Render (health check)
+# Health check для Render
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -213,7 +212,6 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
     
-    # Сбрасываем зависшие апдейты перед стартом
     await bot.delete_webhook(drop_pending_updates=True)
     
     await asyncio.gather(
