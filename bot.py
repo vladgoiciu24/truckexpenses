@@ -12,23 +12,19 @@ from supabase import create_client, Client
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Конфигурация
 TELEGRAM_TOKEN = "8905023648:AAE_zcvaHwUj4WLlOcCsFleS8MEpQvLKWvY"
 SUPABASE_URL = "https://ooerygxpdhhvpueoclgs.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZXJ5Z3hwZGhodnB1ZW9jbGdzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTM0NDc4NywiZXhwIjoyMTA2OTIwNzg3fQ.AQUWaeOHOUNR7g_H1kalDooLuyY_aPV8JdwQOm3R8a4"
 PORT = 10000
 
-# Инициализация Supabase и Геокодера
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 geolocator = Nominatim(user_agent="truck_expenses_bot_2026")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 router = Router()
 
-# Состояния FSM
 class RecordState(StatesGroup):
     expense_category = State()
     expense_amount = State()
@@ -55,7 +51,6 @@ async def cmd_start(message: Message, state: FSMContext):
         reply_markup=main_menu()
     )
 
-# --- РАСХОДЫ ---
 @router.callback_query(F.data == "add_expense")
 async def process_expense(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RecordState.expense_category)
@@ -113,8 +108,6 @@ async def expense_desc_entered(message: Message, state: FSMContext):
     
     await state.clear()
 
-
-# --- ПОЕЗДКИ (С РАСЧЕТОМ МИЛЬ И СТАВКИ ЗА МИЛЮ) ---
 @router.callback_query(F.data == "add_trip")
 async def process_trip(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RecordState.trip_origin)
@@ -158,7 +151,6 @@ async def trip_gross_entered(message: Message, state: FSMContext):
     destination_str = data["destination"]
     deadhead = data["deadhead"]
     
-    # Расчет груженых миль по картам
     loaded = 0.0
     try:
         loc1 = geolocator.geocode(origin_str.strip(), country_codes="us")
@@ -168,7 +160,7 @@ async def trip_gross_entered(message: Message, state: FSMContext):
             coords1 = (loc1.latitude, loc1.longitude)
             coords2 = (loc2.latitude, loc2.longitude)
             straight_miles = geodesic(coords1, coords2).miles
-            loaded = round(straight_miles * 1.2, 1) # Коэффициент учета дорог
+            loaded = round(straight_miles * 1.2, 1)
         else:
             loaded = 100.0
     except Exception as e:
@@ -178,8 +170,6 @@ async def trip_gross_entered(message: Message, state: FSMContext):
     total_miles = round(deadhead + loaded, 1)
     commission = round(gross * 0.12, 2)
     net = round(gross - commission, 2)
-    
-    # Расчет долларов с мили по Гроссу
     rate_per_mile = round(gross / total_miles, 2) if total_miles > 0 else 0.0
     
     await state.update_data(
@@ -225,9 +215,11 @@ async def trip_desc_entered(message: Message, state: FSMContext):
     
     try:
         supabase.table("truck_records").insert(record_data).execute()
+        total_m = data['total_miles']
+        rate_m = data['rate_per_mile']
+        net_v = data['net']
         await message.answer(
-            f"✅ Поездка сохранена!\n"
-            f"Всего миль: {data['total_miles']} | Ставка: ${data['rate_per_mile']:.2f}/mi \vert{} Net:${data['net']:.2f}",
+            f"✅ Поездка сохранена!\nВсего миль: {total_m} | Ставка: ${rate_m:.2f}/mi \vert{} Net:${net_v:.2f}",
             reply_markup=main_menu()
         )
     except Exception as e:
@@ -236,16 +228,12 @@ async def trip_desc_entered(message: Message, state: FSMContext):
     
     await state.clear()
 
-
-# --- СТАТИСТИКА ЗА НЕДЕЛЮ ---
 @router.callback_query(F.data == "week_stats")
 async def show_week_stats(callback: CallbackQuery):
     try:
-        # Определяем начало текущей недели (понедельник)
         now = datetime.utcnow()
         start_of_week = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # Получаем данные из Supabase
         response = supabase.table("truck_records").select("*").gte("created_at", start_of_week.isoformat()).execute()
         records = response.data
         
@@ -300,8 +288,6 @@ async def show_week_stats(callback: CallbackQuery):
         await callback.message.edit_text(f"❌ Ошибка при получении статистики: {e}", reply_markup=main_menu())
         await callback.answer()
 
-
-# Health check для Render
 async def handle(request):
     return web.Response(text="Bot is running!")
 
