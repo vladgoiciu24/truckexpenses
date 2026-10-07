@@ -1,5 +1,7 @@
+import os
 import logging
 import asyncio
+from datetime import datetime, timedelta
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -41,14 +43,15 @@ class RecordState(StatesGroup):
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💸 Добавить расход", callback_data="add_expense")],
-        [InlineKeyboardButton(text="🚛 Добавить поездку", callback_data="add_trip")]
+        [InlineKeyboardButton(text="🚛 Добавить поездку", callback_data="add_trip")],
+        [InlineKeyboardButton(text="📊 Статистика за неделю", callback_data="week_stats")]
     ])
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "🚛 Бот запущен! Автоматический расчет миль по картам активен. Выбирай действие:",
+        "🚛 Бот запущен! Автоматический расчет миль и $/mile активен. Выбирай действие:",
         reply_markup=main_menu()
     )
 
@@ -111,11 +114,11 @@ async def expense_desc_entered(message: Message, state: FSMContext):
     await state.clear()
 
 
-# --- ПОЕЗДКИ (С РАСЧЕТОМ МИЛЬ ПО КАРТАМ) ---
+# --- ПОЕЗДКИ (С РАСЧЕТОМ МИЛЬ И СТАВКИ ЗА МИЛЮ) ---
 @router.callback_query(F.data == "add_trip")
 async def process_trip(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RecordState.trip_origin)
-    await callback.message.edit_text("📍 Введи адрес отправления (например: `Seattle, WA` или точный адрес):")
+    await callback.message.edit_text("📍 Введи адрес отправления (например: `Seattle, WA`):")
     await callback.answer()
 
 @router.message(RecordState.trip_origin)
@@ -155,20 +158,19 @@ async def trip_gross_entered(message: Message, state: FSMContext):
     destination_str = data["destination"]
     deadhead = data["deadhead"]
     
-    # Автоматический расчет груженых миль по картам (geopy)
+    # Расчет груженых миль по картам
     loaded = 0.0
     try:
-        loc1 = geolocator.geocode(origin_str)
-        loc2 = geolocator.geocode(destination_str)
+        loc1 = geolocator.geocode(origin_str.strip(), country_codes="us")
+        loc2 = geolocator.geocode(destination_str.strip(), country_codes="us")
         
         if loc1 and loc2:
             coords1 = (loc1.latitude, loc1.longitude)
             coords2 = (loc2.latitude, loc2.longitude)
-            # Расчет в милях (коэффициент 1.15 для примерного учета дорог вместо прямой)
             straight_miles = geodesic(coords1, coords2).miles
-            loaded = round(straight_miles * 1.15, 1)
+            loaded = round(straight_miles * 1.2, 1) # Коэффициент учета дорог
         else:
-            loaded = 100.0  # Заглушка, если адреса не найдены на карте
+            loaded = 100.0
     except Exception as e:
         logging.error(f"Geocoding error: {e}")
         loaded = 100.0
@@ -177,21 +179,25 @@ async def trip_gross_entered(message: Message, state: FSMContext):
     commission = round(gross * 0.12, 2)
     net = round(gross - commission, 2)
     
+    # Расчет долларов с мили по Гроссу
+    rate_per_mile = round(gross / total_miles, 2) if total_miles > 0 else 0.0
+    
     await state.update_data(
         loaded=loaded, 
         total_miles=total_miles, 
         gross=gross, 
         commission=commission, 
-        net=net
+        net=net,
+        rate_per_mile=rate_per_mile
     )
     await state.set_state(RecordState.trip_desc)
     await message.answer(
-        f"📊 Автоматический расчет по картам:\n"
+        f"📊 Автоматический расчет:\n"
         f"• Маршрут: {origin_str} ➡️ {destination_str}\n"
-        f"• Пустые мили: {deadhead}\n"
-        f"• Груженые мили (по карте): {loaded}\n"
+        f"• Пустые: {deadhead} | Груженые: {loaded}\n"
         f"• Всего миль: {total_miles}\n"
         f"• Гросс: ${gross:.2f}\n"
+        f"• Ставка за милю: ${rate_per_mile:.2f}/mi\n"
         f"• Комиссия (12%): ${commission:.2f}\n"
         f"• Чистыми (Net): ${net:.2f}\n\n"
         f"📝 Введи примечание к рейсу (или напиши `-`):"
@@ -213,14 +219,15 @@ async def trip_desc_entered(message: Message, state: FSMContext):
         "gross": float(data["gross"]),
         "commission": float(data["commission"]),
         "net": float(data["net"]),
+        "rate_per_mile": float(data["rate_per_mile"]),
         "description": str(desc)
     }
     
     try:
         supabase.table("truck_records").insert(record_data).execute()
         await message.answer(
-            f"✅ Поездка ({data['origin']} ➡️ {data['destination']}) сохранена!\n"
-            f"Груженые мили: {data['loaded']} | Net: ${data['net']:.2f}",
+            f"✅ Поездка сохранена!\n"
+            f"Всего миль: {data['total_miles']} | Ставка: ${data['rate_per_mile']:.2f}/mi \vert{} Net:${data['net']:.2f}",
             reply_markup=main_menu()
         )
     except Exception as e:
@@ -228,6 +235,70 @@ async def trip_desc_entered(message: Message, state: FSMContext):
         await message.answer(f"❌ Ошибка сохранения поездки: {e}")
     
     await state.clear()
+
+
+# --- СТАТИСТИКА ЗА НЕДЕЛЮ ---
+@router.callback_query(F.data == "week_stats")
+async def show_week_stats(callback: CallbackQuery):
+    try:
+        # Определяем начало текущей недели (понедельник)
+        now = datetime.utcnow()
+        start_of_week = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Получаем данные из Supabase
+        response = supabase.table("truck_records").select("*").gte("created_at", start_of_week.isoformat()).execute()
+        records = response.data
+        
+        if not records:
+            await callback.message.edit_text(
+                "📊 **Статистика за текущую неделю:**\nЗаписей пока нет.",
+                reply_markup=main_menu(),
+                parse_mode="Markdown"
+            )
+            await callback.answer()
+            return
+
+        total_gross = 0.0
+        total_net = 0.0
+        total_expenses = 0.0
+        total_miles = 0.0
+        trips_count = 0
+        expenses_breakdown = {}
+
+        for r in records:
+            if r.get("record_type") == "trip":
+                total_gross += float(r.get("gross", 0) or 0)
+                total_net += float(r.get("net", 0) or 0)
+                total_miles += float(r.get("total_miles", 0) or 0)
+                trips_count += 1
+            elif r.get("record_type") == "expense":
+                amount = float(r.get("amount", 0) or 0)
+                total_expenses += amount
+                cat = r.get("category", "Прочие")
+                expenses_breakdown[cat] = expenses_breakdown.get(cat, 0.0) + amount
+
+        avg_rate = round(total_gross / total_miles, 2) if total_miles > 0 else 0.0
+        profit_after_expenses = total_net - total_expenses
+
+        exp_text = "".join([f"  • {cat}: ${amt:.2f}\n" for cat, amt in expenses_breakdown.items()]) or "  • Нет расходов\n"
+
+        report = (
+            f"📊 **Статистика за текущую неделю:**\n\n"
+            f"🚛 Рейсов: {trips_count} | Общий пробег: {total_miles:.1f} миль\n"
+            f"💰 Гросс: **${total_gross:.2f}**\n"
+            f"📉 Средняя ставка: **${avg_rate:.2f}/mi**\n"
+            f"💵 Чистыми (Net после 12%): **${total_net:.2f}**\n\n"
+            f"🛠 **Расходы:**\n{exp_text}"
+            f"📦 Всего расходов: **${total_expenses:.2f}**\n\n"
+            f"💎 **Итого на руках (Net - Расходы):** **${profit_after_expenses:.2f}**"
+        )
+
+        await callback.message.edit_text(report, reply_markup=main_menu(), parse_mode="Markdown")
+        await callback.answer()
+    except Exception as e:
+        logging.error(f"Stats error: {e}")
+        await callback.message.edit_text(f"❌ Ошибка при получении статистики: {e}", reply_markup=main_menu())
+        await callback.answer()
 
 
 # Health check для Render
