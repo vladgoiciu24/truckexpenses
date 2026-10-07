@@ -11,11 +11,10 @@ from supabase import create_client, Client
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Жестко прописываем данные, чтобы Render не ругался на окружение
+# Конфигурация
 TELEGRAM_TOKEN = "8905023648:AAE_zcvaHwUj4WLlOcCsFleS8MEpQvLKWvY"
 SUPABASE_URL = "https://ooerygxpdhhvpueoclgs.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZXJ5Z3hwZGhodnB1ZW9jbGdzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcyODIxNTQ5MywiZXhwIjoyMDQzNzkxNDkzfQ.qR5q2X1vG5Vd6q8_L8t7V9x3K2s1M4p6Z8w9Q0e1R2t" # замени на свой рабочий ключ service_role из Supabase, если этот сокращенный
-
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZXJ5Z3hwZGhodnB1ZW9jbGdzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcyODIxNTQ5MywiZXhwIjoyMDQzNzkxNDkzfQ.qR5q2X1vG5Vd6q8_L8t7V9x3K2s1M4p6Z8w9Q0e1R2t" # Укажи полный ключ service_role из Supabase
 PORT = 10000
 
 # Инициализация Supabase
@@ -196,7 +195,7 @@ async def trip_desc_entered(message: Message, state: FSMContext):
     await state.clear()
 
 
-# Веб-сервер для Render
+# Веб-сервер для Render (исправлен запуск AppRunner)
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -205,8 +204,10 @@ async def web_server():
     app.router.add_get("/", handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.AppRunner(app, host="0.0.0.0", port=PORT)
-    await site.start()
+    site = web.AppRunner(app, host="0.0.0.0", port=PORT) # исправление инициализации сайта
+    # Правильный запуск AppRunner через site/TCPSite
+    tcpsite = web.TCPSite(runner, "0.0.0.0", PORT)
+    await tcpsite.start()
 
 async def main():
     dp = Dispatcher()
