@@ -227,13 +227,8 @@ async def trip_desc_entered(message: Message, state: FSMContext):
         supabase.table("truck_records").insert(record_data).execute()
         await message.answer(
             f"✅ Поездка сохранена!\n"
-           try:
-        supabase.table("truck_records").insert(record_data).execute()
-        await message.answer(
-            f"✅ Поездка сохранена!\n"
-            f"Всего миль: {data['total_miles']} | Ставка: ${data['rate_per_mile']:.2f}/mi | Net: ${data['net']:.2f}",
+            f"Всего миль: {data['total_miles']} | Ставка: ${data['rate_per_mile']:.2f}/mi \vert{} Net:${data['net']:.2f}",
             reply_markup=main_menu()
-        )
         )
     except Exception as e:
         logging.error(f"Supabase error (trip): {e}")
