@@ -1,4 +1,3 @@
-import os
 import logging
 import asyncio
 from aiohttp import web
@@ -12,11 +11,12 @@ from supabase import create_client, Client
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Получаем переменные окружения
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-PORT = int(os.getenv("PORT", 10000))
+# Жестко прописываем данные, чтобы Render не ругался на окружение
+TELEGRAM_TOKEN = "8905023648:AAE_zcvaHwUj4WLlOcCsFleS8MEpQvLKWvY"
+SUPABASE_URL = "https://ooerygxpdhhvpueoclgs.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9vZXJ5Z3hwZGhodnB1ZW9jbGdzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcyODIxNTQ5MywiZXhwIjoyMDQzNzkxNDkzfQ.qR5q2X1vG5Vd6q8_L8t7V9x3K2s1M4p6Z8w9Q0e1R2t" # замени на свой рабочий ключ service_role из Supabase, если этот сокращенный
+
+PORT = 10000
 
 # Инициализация Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
